@@ -178,7 +178,7 @@ func runContainer(path, image string) error {
 		"--tmpfs", "/tmp:rw,nosuid,nodev,size=128m,uid=10001,gid=10001",
 		"--mount", "type=volume,src=web-edge-data,dst=/data",
 		"--mount", "type=bind,src="+path+",dst=/config/config.json,readonly",
-		"-p", "80:8080/tcp", "-p", "443:8443/tcp", "-p", "443:8443/udp",
+		"-p", "80:8080/tcp", "-p", "443:8443/tcp",
 		"--log-driver", "json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=3", image)
 }
 

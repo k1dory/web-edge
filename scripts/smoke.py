@@ -122,7 +122,8 @@ try:
             r = conn.getresponse(); h = dict(r.getheaders()); h['_cookies'] = r.headers.get_all('Set-Cookie', [])
             result = r.status, h, r.read(); conn.close(); return result
 
-        status, _, data = request('app', '/headers', headers={'X-Forwarded-For':'203.0.113.1', 'X-Real-IP':'203.0.113.2', 'Forwarded':'for=203.0.113.3'})
+        status, response_headers, data = request('app', '/headers', headers={'X-Forwarded-For':'203.0.113.1', 'X-Real-IP':'203.0.113.2', 'Forwarded':'for=203.0.113.3'})
+        check('no internal container port advertised to browsers', ':8443' not in response_headers.get('Alt-Svc', ''))
         hdr = {k.lower():v for k,v in json.loads(data)['headers'].items()}
         source_ip = hdr['x-real-ip']
         check('TLS trusted, upstream reachable, forged headers replaced', status == 200

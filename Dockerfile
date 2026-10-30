@@ -37,7 +37,7 @@ LABEL org.opencontainers.image.source="https://github.com/k1dory/web-edge" \
       org.opencontainers.image.licenses="MIT"
 ENV HOME=/data XDG_DATA_HOME=/data/caddy XDG_CONFIG_HOME=/data/config KO_DATA_PATH=/var/run/ko
 USER 10001:10001
-EXPOSE 8080/tcp 8443/tcp 8443/udp
+EXPOSE 8080/tcp 8443/tcp
 HEALTHCHECK --interval=5s --timeout=3s --start-period=30s --retries=3 CMD ["/usr/bin/web-edge", "health"]
 ENTRYPOINT ["/usr/bin/web-edge"]
 CMD ["serve"]

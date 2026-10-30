@@ -13,7 +13,7 @@ func Render(c Config) (string, error) {
 	}
 	var b strings.Builder
 	f := func(s string, a ...any) { fmt.Fprintf(&b, s, a...) }
-	f("{\n admin 127.0.0.1:2019\n http_port 8080\n https_port 8443\n email %s\n persist_config off\n skip_install_trust\n", c.Email)
+	f("{\n admin 127.0.0.1:2019\n http_port 8080\n https_port 8443\n servers {\n  protocols h1 h2\n }\n email %s\n persist_config off\n skip_install_trust\n", c.Email)
 	if c.TLS == "internal" {
 		f(" local_certs\n")
 	}
