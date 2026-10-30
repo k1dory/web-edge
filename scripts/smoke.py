@@ -127,24 +127,6 @@ try:
         source_ip = hdr['x-real-ip']
         check('TLS trusted, upstream reachable, forged headers replaced', status == 200
               and hdr['x-forwarded-for'] == source_ip and source_ip not in ['203.0.113.1','203.0.113.2'] and 'forwarded' not in hdr)
-        for path in ['/?q=%27%20OR%201%3D1--', '/?q=%3Cscript%3Ealert(1)%3C/script%3E', '/?file=/etc/passwd']:
-            check('WAF blocks ' + path, request('app', path)[0] == 403)
-        for path in ['/', '/cgi-bin/', '/cgi-bin/login.html', '/cgi-bin/authLogin.cgi', '/share.cgi', '/share.cgi?', '/login?next=/share.cgi?x=1']:
-            check('share-only rejects ' + path, request('share', path)[0] == 404)
-        check('share endpoint allowed with query', request('share', '/share.cgi?ssid=fixture')[0] == 200)
-        asset = '/cgi-bin/apps/fileManager/js/shlkPlugin.js'
-        check('sharing asset allowed', request('share', asset)[0] == 200)
-        check('POST to sharing asset rejected', request('share', asset, 'POST', b'')[0] == 404)
-        form = b'user=fixture&pwd=ZHVtbXk%3D'
-        for _ in range(20):
-            assert request('login', '/cgi-bin/authLogin.cgi', 'POST', form, {'Content-Type':'application/x-www-form-urlencoded'})[0] == 200
-        status, hdr, _ = request('login', '/cgi-bin/authLogin.cgi')
-        check('login limit returns 429 and Retry-After', status == 429 and 'Retry-After' in hdr)
-        check('request body limit enforced', request('small', '/upload', 'POST', b'x'*(2*1024*1024), {'Content-Type':'text/plain'})[0] == 413)
-        multipart = b'--fixture\r\nContent-Disposition: form-data; name="file"; filename="test.bin"\r\nContent-Type: application/octet-stream\r\n\r\n' + b'x'*(16*1024*1024) + b'\r\n--fixture--\r\n'
-        status, _, data = request('app', '/upload', 'POST', multipart, {'Content-Type':'multipart/form-data; boundary=fixture'})
-        check('16 MiB upload intact', status == 200 and json.loads(data)['size'] == len(multipart))
-        del multipart
         status, hdr, _ = request('protected')
         check('protected site redirects to Anubis', status == 307 and 'botcheck.gw.example.test' in hdr['Location'])
         dest = urllib.parse.urlsplit(hdr['Location'])
@@ -166,7 +148,11 @@ try:
         cookies = '; '.join(s.split(';',1)[0] for s in hdr['_cookies'])
         check('valid proof reaches backend', request('protected', headers={'Cookie':cookies})[0] == 200)
         docker('restart', container); healthy()
-        check('cookie and certificate survive restart', request('protected', headers={'Cookie':cookies})[0] == 200)
+        status, headers, body = request('protected', headers={'Cookie':cookies})
+        if status != 200:
+            print('After restart:', status, headers.get('Location', ''), body[:160])
+            print(docker('exec', container, 'cscli', '-c', '/data/crowdsec/config.yaml', 'decisions', 'list', '-o', 'json'))
+        check('cookie and certificate survive restart', status == 200)
         docker('exec', container, 'cscli', '-c', '/data/crowdsec/config.yaml', 'decisions', 'add', '--ip', source_ip, '--duration', '1m', '--reason', 'isolated-smoke')
         for _ in range(12):
             if request('app')[0] == 403: break
@@ -178,12 +164,35 @@ try:
             if request('app')[0] == 200: break
             time.sleep(1)
         else: raise AssertionError('CrowdSec decision not removed')
+        # Keep the normal browser/restart/explicit-ban checks ahead of deliberate
+        # attacks. Those attacks may legitimately create asynchronous CrowdSec
+        # decisions for this same client address.
+        for path in ['/?q=%27%20OR%201%3D1--', '/?q=%3Cscript%3Ealert(1)%3C/script%3E', '/?file=/etc/passwd']:
+            check('WAF blocks ' + path, request('app', path)[0] == 403)
+        for path in ['/', '/cgi-bin/', '/cgi-bin/login.html', '/cgi-bin/authLogin.cgi', '/share.cgi', '/share.cgi?', '/login?next=/share.cgi?x=1']:
+            check('share-only rejects ' + path, request('share', path)[0] == 404)
+        check('share endpoint allowed with query', request('share', '/share.cgi?ssid=fixture')[0] == 200)
+        asset = '/cgi-bin/apps/fileManager/js/shlkPlugin.js'
+        check('sharing asset allowed', request('share', asset)[0] == 200)
+        check('POST to sharing asset rejected', request('share', asset, 'POST', b'')[0] == 404)
+        form = b'user=fixture&pwd=ZHVtbXk%3D'
+        for _ in range(20):
+            assert request('login', '/cgi-bin/authLogin.cgi', 'POST', form, {'Content-Type':'application/x-www-form-urlencoded'})[0] == 200
+        status, hdr, _ = request('login', '/cgi-bin/authLogin.cgi')
+        check('login limit returns 429 and Retry-After', status == 429 and 'Retry-After' in hdr)
+        check('request body limit enforced', request('small', '/upload', 'POST', b'x'*(2*1024*1024), {'Content-Type':'text/plain'})[0] == 413)
+        multipart = b'--fixture\r\nContent-Disposition: form-data; name="file"; filename="test.bin"\r\nContent-Type: application/octet-stream\r\n\r\n' + b'x'*(16*1024*1024) + b'\r\n--fixture--\r\n'
+        status, _, data = request('app', '/upload', 'POST', multipart, {'Content-Type':'multipart/form-data; boundary=fixture'})
+        check('16 MiB upload intact', status == 200 and json.loads(data)['size'] == len(multipart))
+        del multipart
         records = []
         for line in docker('logs', container).splitlines():
             try: records.append(json.loads(line))
             except json.JSONDecodeError: pass
         waf = [r for r in records if 'Coraza:' in r.get('message','')]
         check('WAF logs retain host and container identity', bool(waf) and all(r.get('node')=='smoke-host' and r.get('host_ip')=='10.20.0.5' and r.get('container')=='web-edge-smoke' for r in waf))
+        for tag in ['attack-sqli', 'attack-xss', 'attack-lfi']:
+            check('CRS evaluated ' + tag, any(tag in r.get('message','') for r in waf))
         print('All isolated image checks passed', flush=True)
 except Exception:
     if ('container', container) in created:
