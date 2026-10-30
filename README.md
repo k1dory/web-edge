@@ -175,7 +175,8 @@ python3 scripts/package.py --version 0.1.0
 python3 scripts/smoke.py --image web-edge:dev
 ```
 
-Тесты Docker используют только синтетический backend в отдельной сети, отдельные
+Тесты Docker запускаются на Linux с обычным Docker Engine (не Docker Desktop) и
+используют только синтетический backend в отдельной сети, отдельные
 тома и внутренний CA. GitHub Actions проверяет исходники, собирает amd64/arm64,
 публикует архивы образа, CLI-пакеты и контрольные суммы в Releases по тегу версии.
 

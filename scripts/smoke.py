@@ -95,14 +95,15 @@ try:
                '--security-opt', 'no-new-privileges', '--pids-limit', '256', '--memory', '2g', '--cpus', '2',
                '--tmpfs', '/tmp:rw,nosuid,nodev,size=128m,uid=10001,gid=10001',
                '--mount', f'type=volume,src={volume},dst=/data',
-               '--mount', f'type=bind,src={config},dst=/config/config.json,readonly',
-               '-p', '127.0.0.1::8443', '-p', '127.0.0.1::8080', args.image)
+               '--mount', f'type=bind,src={config},dst=/config/config.json,readonly', args.image)
         created.append(('container', container))
         healthy()
         state = json.loads(docker('inspect', container))[0]
-        port = int(state['NetworkSettings']['Ports']['8443/tcp'][0]['HostPort'])
-        http_port = int(state['NetworkSettings']['Ports']['8080/tcp'][0]['HostPort'])
-        conn = http.client.HTTPConnection('127.0.0.1', http_port, timeout=10)
+        # Native Linux host can reach its bridge directly. Docker deliberately
+        # does not publish ports from an --internal network on recent engines.
+        address = state['NetworkSettings']['Networks'][network]['IPAddress']
+        port = 8443
+        conn = http.client.HTTPConnection(address, 8080, timeout=10)
         conn.request('GET', '/test?x=1', headers={'Host':'app.gw.example.test'})
         response = conn.getresponse()
         check('HTTP redirects to public HTTPS port', response.status == 308
@@ -114,7 +115,7 @@ try:
         def request(name, path='/', method='GET', body=None, headers=None):
             host = name + '.gw.example.test'
             conn = http.client.HTTPSConnection(host, port, context=tls, timeout=20)
-            conn._create_connection = lambda *_a, **_kw: socket.create_connection(('127.0.0.1', port), timeout=20)
+            conn._create_connection = lambda *_a, **_kw: socket.create_connection((address, port), timeout=20)
             hdr = {'User-Agent':'Mozilla/5.0 web-edge-smoke', 'Host':host, 'Accept':'*/*'}
             hdr.update(headers or {})
             conn.request(method, path, body=body, headers=hdr)
