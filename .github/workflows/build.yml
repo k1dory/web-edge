@@ -54,6 +54,10 @@ jobs:
           if [ "$REF_TYPE" = tag ]; then VERSION="${REF_NAME#v}"; fi
           python3 scripts/package.py --version "$VERSION" --arch "$ARCH"
           dpkg-deb --info "dist/web-edge_${VERSION}_${ARCH}.deb"
+          PACKAGE_DIR="$(mktemp -d)"
+          dpkg-deb --extract "dist/web-edge_${VERSION}_${ARCH}.deb" "$PACKAGE_DIR"
+          "$PACKAGE_DIR/usr/bin/web-edge" version
+          python3 scripts/smoke-cli.py --cli "$PACKAGE_DIR/usr/bin/web-edge" --image web-edge:dev
           docker tag web-edge:dev "web-edge:$VERSION"
           docker save "web-edge:$VERSION" | gzip > "dist/web-edge-image-linux-${ARCH}.tar.gz"
           rm dist/SHA256SUMS

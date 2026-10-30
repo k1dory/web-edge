@@ -6,3 +6,4 @@ web-edge
 *.deb
 *.log
 .env
+**/__pycache__
