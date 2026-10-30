@@ -8,3 +8,7 @@ bots:
     challenge:
       difficulty: 4
       algorithm: fast
+dnsbl: false
+status_codes:
+  CHALLENGE: 200
+  DENY: 403
