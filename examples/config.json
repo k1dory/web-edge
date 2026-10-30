@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "zone": "gw.example.com",
+  "email": "ops@example.com",
+  "tls": "acme",
+  "identity": {"node": "edge01", "host_ip": "10.20.0.5", "container": "web-edge"},
+  "sites": [{
+    "name": "nas", "upstream": "https://10.20.0.10:443", "profile": "qnap-share", "share_only": true,
+    "bot_check": true, "waf": "block", "insecure_upstream_tls": false,
+    "max_body_mib": 1024, "rate_per_minute": 600,
+    "login_paths": ["/cgi-bin/authLogin.cgi", "/cgi-bin/authLogin.cgi/*"],
+    "login_per_minute": 20, "login_per_15_minutes": 100
+  }]
+}

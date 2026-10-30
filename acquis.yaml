@@ -1,0 +1,4 @@
+filenames:
+  - /data/logs/access.json
+labels:
+  type: caddy

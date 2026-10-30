@@ -1,0 +1,94 @@
+# Vector runs on the Docker host. Set ARGUS_EVENTS_URL and ARGUS_TOKEN in its
+# environment. Trust your collector CA in the host trust store; TLS verification
+# stays enabled. The web-edge container does not get the Docker socket or token.
+data_dir: /var/lib/vector
+sources:
+  web_edge:
+    type: docker_logs
+    include_containers: [web-edge]
+
+transforms:
+  waf_events:
+    type: remap
+    inputs: [web_edge]
+    drop_on_abort: true
+    drop_on_error: true
+    source: |
+      outer = object!(parse_json!(string!(.message)))
+      if outer.service != "caddy" { abort }
+      inner = object!(parse_json!(string!(outer.message)))
+      if inner.logger != "http.handlers.waf" { abort }
+      msg = string!(inner.msg)
+      if !contains(msg, "Coraza: ") { abort }
+      t = parse_timestamp(string!(outer.timestamp), format: "%+") ?? now()
+      ev = {
+        "ts": format_timestamp!(t, "%Y-%m-%d %H:%M:%S%.3f", timezone: "UTC"),
+        "source": "waf.coraza", "source_class": "waf", "vendor": "Coraza", "product": "coraza",
+        "action": "http.attack", "outcome": "allow", "severity": 5,
+        "node": string!(outer.node), "proto": "tcp", "raw": msg,
+        "attrs": {
+          "hostname": string!(outer.node), "host_ip": string(outer.host_ip) ?? "",
+          "container": string!(outer.container), "service": "caddy"
+        }
+      }
+      if contains(msg, "Coraza: Access denied") { ev.outcome = "deny"; ev.severity = 7 }
+      # Sender identity is never taken from HTTP Host or Coraza's socket address.
+      client = parse_regex(msg, r'^.*?\[client "?(?P<ip>[0-9a-fA-F:.]+)"?\].*?Coraza:') ?? {}
+      client_ip = string(client.ip) ?? ""
+      if is_ipv4(client_ip) || is_ipv6(client_ip) { ev.src_ip = client_ip; ev.actor_name = client_ip }
+      # Rule metadata follows [file ...]; request data before it is not identity.
+      metadata = parse_regex(msg, r'\[file "[^"\n]*"\](?P<fields>.*)$') ?? {}
+      fields = string(metadata.fields) ?? ""
+      server = parse_regex(fields, r'\[hostname "(?P<addr>[0-9a-fA-F:.]+)"\]') ?? {}
+      server_addr = string(server.addr) ?? ""
+      if is_ipv4(server_addr) || is_ipv6(server_addr) {
+        ev.dst_ip = server_addr
+        ev.attrs.server_addr = server_addr
+      }
+      rule = parse_regex(fields, r'\[id "(?P<id>[0-9]+)"\]') ?? {}
+      if exists(rule.id) { ev.attrs.rule_ids = string!(rule.id) }
+      uri = parse_regex(fields, r'\[uri "(?P<uri>[^"\n]*)"\]') ?? {}
+      if exists(uri.uri) { ev.object = string!(uri.uri) }
+      session = parse_regex(fields, r'\[unique_id "(?P<id>[^"\n]*)"\]') ?? {}
+      if exists(session.id) { ev.session_id = string!(session.id) }
+      . = ev
+
+sinks:
+  argus:
+    type: http
+    inputs: [waf_events]
+    uri: "${ARGUS_EVENTS_URL}"
+    method: post
+    auth:
+      strategy: bearer
+      token: "${ARGUS_TOKEN}"
+    encoding:
+      codec: json
+    framing:
+      method: newline_delimited
+    compression: gzip
+    buffer:
+      type: disk
+      max_size: 536870912
+      when_full: block
+    acknowledgements:
+      enabled: true
+
+tests:
+  - name: host_identity_is_not_coraza_container_ip
+    inputs:
+      - insert_at: waf_events
+        type: log
+        log_fields:
+          message: '{"timestamp":"2026-01-01T12:00:00Z","node":"edge01","host_ip":"10.20.0.5","container":"web-edge","service":"caddy","message":"{\"logger\":\"http.handlers.waf\",\"msg\":\"[client \\\"203.0.113.25\\\"] Coraza: Access denied with code 403 (phase 2). [file \\\"/rules/test.conf\\\"] [id \\\"949110\\\"] [hostname \\\"172.19.0.4\\\"] [uri \\\"/test\\\"]\"}"}'
+    outputs:
+      - extract_from: waf_events
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.node, "edge01")
+              assert_eq!(.attrs.host_ip, "10.20.0.5")
+              assert_eq!(.attrs.container, "web-edge")
+              assert_eq!(.dst_ip, "172.19.0.4")
+              assert_eq!(.src_ip, "203.0.113.25")
+              assert_eq!(.outcome, "deny")

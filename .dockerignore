@@ -1,0 +1,8 @@
+.git
+dist
+.test-state
+.test-build
+web-edge
+*.deb
+*.log
+.env

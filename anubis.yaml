@@ -1,0 +1,10 @@
+bots:
+  - name: explicit-automation
+    user_agent_regex: '(?i:HeadlessChrome|HeadlessChromium|PhantomJS|Lightpanda|TLM-Audit-Scanner|l9scan|sqlmap|nuclei|zgrab|masscan|GPTBot|ClaudeBot|Bytespider)'
+    action: DENY
+  - name: browser
+    user_agent_regex: .*
+    action: CHALLENGE
+    challenge:
+      difficulty: 4
+      algorithm: fast

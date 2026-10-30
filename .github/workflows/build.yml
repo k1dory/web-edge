@@ -1,0 +1,89 @@
+name: Build and test
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Test CLI
+        run: |
+          go test -race ./...
+          go vet ./...
+      - name: Build image
+        run: docker build -t web-edge:dev .
+      - name: Isolated integration tests
+        run: python3 scripts/smoke.py --image web-edge:dev
+      - name: Vector normalization tests
+        env:
+          ARGUS_EVENTS_URL: https://collector.example.test/ingest/events
+          ARGUS_TOKEN: fixture-only
+        run: |
+          docker run --rm --network=none --read-only --cap-drop ALL \
+            -e ARGUS_EVENTS_URL -e ARGUS_TOKEN \
+            -v "$PWD/examples/vector-argus.yaml:/etc/vector/vector.yaml:ro" \
+            timberio/vector:0.60.0-debian test /etc/vector/vector.yaml
+      - name: Build CLI packages
+        env:
+          ARCH: ${{ matrix.arch }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION=0.1.0
+          if [ "$REF_TYPE" = tag ]; then VERSION="${REF_NAME#v}"; fi
+          python3 scripts/package.py --version "$VERSION" --arch "$ARCH"
+          dpkg-deb --info "dist/web-edge_${VERSION}_${ARCH}.deb"
+          docker tag web-edge:dev "web-edge:$VERSION"
+          docker save "web-edge:$VERSION" | gzip > "dist/web-edge-image-linux-${ARCH}.tar.gz"
+          rm dist/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/
+          retention-days: 7
+          compression-level: 0
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: linux-*
+          path: dist
+          merge-multiple: true
+      - name: Publish verified artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          cd dist
+          sha256sum web-edge-* *.deb > SHA256SUMS
+          gh release create "$RELEASE_TAG" --verify-tag --title "web-edge $RELEASE_TAG" \
+            --notes 'One Docker image and setup CLI for Linux amd64/arm64. Verify SHA256SUMS before installation. See README for DNS, profiles, limits and logging.' \
+            ./*.deb ./web-edge-linux-* ./web-edge-image-linux-*.tar.gz ./SHA256SUMS
